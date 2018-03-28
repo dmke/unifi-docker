@@ -2,33 +2,36 @@
 
 PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-. /usr/unifi/functions
+log() {
+    echo "$(date +"[%Y-%m-%d %T,%3N]") <docker-entrypoint> $*"
+}
 
-if [[ ! -d "${CERTDIR}" || ! -f "${CERTDIR}/${CERTNAME}" ]]; then
-    exit 0
+if [ ! -d "${CERTDIR}" ] || [ ! -f "${CERTDIR}/${CERTNAME}" ]; then
+  exit 0
 fi
 
 log 'Cert directory found. Checking Certs'
 
 if `md5sum -c "${CERTDIR}/${CERTNAME}.md5" &>/dev/null`; then
-    log "Cert has not changed, not updating controller."
-    exit 0
-else
-    if [ ! -e "${DATADIR}/keystore" ]; then
-        log "WARN: Missing keystore, creating a new one"
-        keytool -genkey -keyalg RSA -alias unifi -keystore "${DATADIR}/keystore" \
-            -storepass aircontrolenterprise -keypass aircontrolenterprise -validity 1825 \
-            -keysize 4096 -dname "cn=UniFi"
-    fi
+	log "Cert has not changed, not updating controller."
+	exit 0
+fi
 
-    TEMPFILE=$(mktemp)
-    TMPLIST="${TEMPFILE}"
-    CERTTEMPFILE=$(mktemp)
-    TMPLIST+=" ${CERTTEMPFILE}"
-    CERTURI=$(openssl x509 -noout -ocsp_uri -in "${CERTDIR}/${CERTNAME}")
-    # Identrust cross-signed CA cert needed by the java keystore for import.
-    # Can get original here: https://www.identrust.com/certificates/trustid/root-download-x3.html
-    cat > "${CERTTEMPFILE}" <<'_EOF'
+if [ ! -e "${DATADIR}/keystore" ]; then
+	log "WARN: Missing keystore, creating a new one"
+	keytool -genkey -keyalg RSA -alias unifi -keystore "${DATADIR}/keystore" \
+		-storepass aircontrolenterprise -keypass aircontrolenterprise -validity 1825 \
+		-keysize 4096 -dname "cn=UniFi"
+fi
+
+TEMPFILE="$(mktemp)"
+CERTTEMPFILE="$(mktemp)"
+TMPLIST="${TEMPFILE} ${CERTTEMPFILE}"
+CERTURI=$(openssl x509 -noout -ocsp_uri -in "${CERTDIR}/${CERTNAME}")
+
+# Identrust cross-signed CA cert needed by the java keystore for import.
+# Can get original here: https://www.identrust.com/certificates/trustid/root-download-x3.html
+cat > "${CERTTEMPFILE}" <<'_EOF'
 -----BEGIN CERTIFICATE-----
 MIIDSjCCAjKgAwIBAgIQRK+wgNajJ7qJMDmGLvhAazANBgkqhkiG9w0BAQUFADA/
 MSQwIgYDVQQKExtEaWdpdGFsIFNpZ25hdHVyZSBUcnVzdCBDby4xFzAVBgNVBAMT
@@ -51,39 +54,46 @@ Ob8VZRzI9neWagqNdwvYkQsEjgfbKbYK7p2CNTUQ
 -----END CERTIFICATE-----
 _EOF
 
-    log "Cert has changed, updating controller..."
-    md5sum "${CERTDIR}/${CERTNAME}" > "${CERTDIR}/${CERTNAME}.md5"
-    log "Using openssl to prepare certificate..."
-    CHAIN=$(mktemp)
-    TMPLIST+=" ${CHAIN}"
+log "Cert has changed, updating controller..."
+md5sum "${CERTDIR}/${CERTNAME}" > "${CERTDIR}/${CERTNAME}.md5"
 
-    if [[ "${CERTURI}" == *"letsencrypt"* && "$CERT_IS_CHAIN" == "true" ]]; then
-        awk 1 "${CERTTEMPFILE}" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
-    elif [[ "${CERTURI}" == *"letsencrypt"* ]]; then
-        awk 1 "${CERTTEMPFILE}" "${CERTDIR}/chain.pem" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
-    elif [[ -f "${CERTDIR}/ca.pem" ]]; then
-        awk 1 "${CERTDIR}/ca.pem" "${CERTDIR}/chain.pem" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
-    else
-        awk 1 "${CERTDIR}/chain.pem" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
-    fi
-   openssl pkcs12 -export  -passout pass:aircontrolenterprise \
-        -in "${CHAIN}" \
-        -inkey "${CERTDIR}/privkey.pem" \
-        -out "${TEMPFILE}" -name unifi
-    log "Removing existing certificate from Unifi protected keystore..."
-    keytool -delete -alias unifi -keystore "${DATADIR}/keystore" \
-        -deststorepass aircontrolenterprise
-    log "Inserting certificate into Unifi keystore..."
-    keytool -trustcacerts -importkeystore \
-        -deststorepass aircontrolenterprise \
-        -destkeypass aircontrolenterprise \
-        -destkeystore "${DATADIR}/keystore" \
-        -srckeystore "${TEMPFILE}" -srcstoretype PKCS12 \
-        -srcstorepass aircontrolenterprise \
-        -alias unifi
-    log "Cleaning up temp files"
-    for file in ${TMPLIST}; do
-        rm -f "${file}"
-    done
-    log "Done!"
+log "Using openssl to prepare certificate..."
+CHAIN="$(mktemp)"
+TMPLIST+=" ${CHAIN}"
+
+if [[ "${CERTURI}" == *"letsencrypt"* && "$CERT_IS_CHAIN" == "true" ]]; then
+	awk 1 "${CERTTEMPFILE}" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
+elif [[ "${CERTURI}" == *"letsencrypt"* ]]; then
+	awk 1 "${CERTTEMPFILE}" "${CERTDIR}/chain.pem" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
+elif [[ -f "${CERTDIR}/ca.pem" ]]; then
+	awk 1 "${CERTDIR}/ca.pem" "${CERTDIR}/chain.pem" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
+else
+	awk 1 "${CERTDIR}/chain.pem" "${CERTDIR}/${CERTNAME}" >> "${CHAIN}"
 fi
+
+openssl pkcs12 -export  -passout pass:aircontrolenterprise \
+	-in "${CHAIN}" \
+	-inkey "${CERTDIR}/privkey.pem" \
+	-out "${TEMPFILE}" \
+	-name unifi
+
+log "Removing existing certificate from Unifi protected keystore..."
+keytool -delete \
+	-alias unifi \
+	-keystore "${DATADIR}/keystore" \
+	-deststorepass aircontrolenterprise
+
+log "Inserting certificate into Unifi keystore..."
+keytool -trustcacerts -importkeystore \
+	-deststorepass aircontrolenterprise \
+	-destkeypass aircontrolenterprise \
+	-destkeystore "${DATADIR}/keystore" \
+	-srckeystore "${TEMPFILE}" \
+	-srcstoretype PKCS12 \
+	-srcstorepass aircontrolenterprise \
+	-alias unifi
+
+log "Cleaning up temp files"
+rm -f -- ${TMPLIST}
+
+log "Done!"
