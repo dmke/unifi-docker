@@ -5,11 +5,13 @@ ENV GOSU_VERSION    1.10
 ENV GOSU_URL        https://github.com/tianon/gosu/releases/download
 ENV PKG_URL         https://dl.ubnt.com/unifi/5.7.20/unifi_sysvinit_all.deb
 
-# download and verify gosu
+COPY mongodb-org-server /tmp/
+
+# download and verify gosu, download unifi.deb and build virtual mongodb
 # (https://github.com/tianon/gosu/blob/master/INSTALL.md)
 RUN set -ex \
  && apt-get update \
- && apt-get install -yq --no-install-recommends ca-certificates curl \
+ && apt-get install -yq --no-install-recommends ca-certificates curl equivs \
  && dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
  && curl --fail -Lo /tmp/gosu     "${GOSU_URL}/${GOSU_VERSION}/gosu-$dpkgArch" \
  && curl --fail -Lo /tmp/gosu.asc "${GOSU_URL}/${GOSU_VERSION}/gosu-$dpkgArch.asc" \
@@ -18,7 +20,8 @@ RUN set -ex \
  && gpg --batch --verify /tmp/gosu.asc /tmp/gosu \
  && chmod +x /tmp/gosu \
  && /tmp/gosu nobody true \
- && curl --fail -Lo /tmp/unifi.deb "${PKG_URL}"
+ && curl --fail -Lo /tmp/unifi.deb "${PKG_URL}" \
+ && cd /tmp && equivs-build mongodb-org-server
 
 FROM ubuntu:xenial
 
@@ -40,12 +43,14 @@ ENV UNIFI_GID       999
 ENV UNIFI_UID       999
 ENV JVM_CRGOUPS     false
 
-COPY --from=downloads /tmp/gosu      /usr/local/bin/
-COPY --from=downloads /tmp/unifi.deb /tmp
+COPY --from=downloads /tmp/gosu     /usr/local/bin/
+COPY --from=downloads \
+     /tmp/mongodb-org-server_3.6.0_all.deb \
+     /tmp/unifi.deb                 /tmp/
 COPY docker-entrypoint.sh  \
      docker-healthcheck.sh \
-     docker-build.sh       /usr/local/bin/
-COPY import_cert           /usr/unifi/init.d/
+     docker-build.sh                /usr/local/bin/
+COPY import_cert                    /usr/unifi/init.d/
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && chmod +x /usr/unifi/init.d/import_cert \

@@ -1,0 +1,15 @@
+Section: database
+Priority: optional
+Standards-Version: 3.9.2
+
+Package: mongodb-org-server
+Version: 3.6.0
+Maintainer: Dominik Menke <dominik.menke@gmail.com>
+Provides: mongodb-org-server
+Replaces: mongodb-org-server
+Architecture: all
+Description: Provides virtual MongoDB server
+ The official Unifi Controller package has a hard dependency on to
+ MongoDB, but can actually be configured to use an external instance.
+ This package exists to satisfy this dependency without actually
+ installing a MongoDB server.
